@@ -1,0 +1,154 @@
+{% extends 'base.html' %}
+
+{% block title %}影片列表 - 个人影视网站{% endblock %}
+
+{% block content %}
+<!-- 英雄区域 -->
+<div class="hero-section">
+    <div class="container text-center">
+        <h1 class="display-4 mb-4">
+            <i class="bi bi-film"></i> 发现精彩影片
+        </h1>
+        <p class="lead">探索您的个人影视收藏</p>
+    </div>
+</div>
+
+<div class="container my-5">
+    <!-- 搜索和筛选 -->
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <form method="get" class="d-flex">
+                <input type="text" name="search" class="form-control me-2" 
+                       placeholder="搜索影片标题或描述..." value="{{ search }}">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-search"></i> 搜索
+                </button>
+            </form>
+        </div>
+        <div class="col-md-4">
+            <form method="get">
+                {% if search %}
+                <input type="hidden" name="search" value="{{ search }}">
+                {% endif %}
+                <select name="genre" class="form-select" onchange="this.form.submit()">
+                    <option value="">所有类型</option>
+                    {% for genre in genres %}
+                    <option value="{{ genre }}" {% if genre == selected_genre %}selected{% endif %}>
+                        {{ genre }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+    </div>
+
+    <!-- 影片网格 -->
+    <div class="row">
+        {% for movie in movies %}
+        <div class="col-lg-3 col-md-4 col-sm-6 mb-4">
+            <div class="card movie-card h-100">
+                {% if movie.thumbnail %}
+                <img src="{{ movie.thumbnail.url }}" class="card-img-top movie-thumbnail" alt="{{ movie.title }}">
+                {% else %}
+                <div class="card-img-top movie-thumbnail bg-secondary d-flex align-items-center justify-content-center">
+                    <i class="bi bi-film text-white" style="font-size: 3rem;"></i>
+                </div>
+                {% endif %}
+                
+                <div class="card-body d-flex flex-column">
+                    <h5 class="card-title">{{ movie.title }}</h5>
+                    <p class="card-text text-muted small">
+                        {% if movie.genre %}
+                        <span class="badge bg-secondary me-1">{{ movie.genre }}</span>
+                        {% endif %}
+                        {% if movie.year %}
+                        <span class="badge bg-info">{{ movie.year }}</span>
+                        {% endif %}
+                    </p>
+                    
+                    <div class="row text-muted small mb-2">
+                        <div class="col-6">
+                            <i class="bi bi-hdd"></i> {{ movie.file_size_mb }} MB
+                        </div>
+                        <div class="col-6">
+                            <i class="bi bi-eye"></i> {{ movie.views }} 次
+                        </div>
+                    </div>
+                    
+                    {% if movie.description %}
+                    <p class="card-text">
+                        {{ movie.description|truncatechars:100 }}
+                    </p>
+                    {% endif %}
+                    
+                    <div class="mt-auto">
+                        <a href="{{ movie.get_absolute_url }}" class="btn btn-primary w-100">
+                            <i class="bi bi-play-circle"></i> 观看
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="col-12 text-center py-5">
+            <i class="bi bi-film text-muted" style="font-size: 4rem;"></i>
+            <h3 class="text-muted mt-3">暂无影片</h3>
+            <p class="text-muted">
+                {% if search or selected_genre %}
+                没有找到符合条件的影片。<a href="{% url 'movie_list' %}">查看所有影片</a>
+                {% else %}
+                还没有扫描到任何影片，请使用管理命令扫描视频文件。
+                {% endif %}
+            </p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- 分页 -->
+    {% if is_paginated %}
+    <nav aria-label="影片分页">
+        <ul class="pagination justify-content-center">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?page=1{% if search %}&search={{ search }}{% endif %}{% if selected_genre %}&genre={{ selected_genre }}{% endif %}">
+                    <i class="bi bi-chevron-double-left"></i>
+                </a>
+            </li>
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if search %}&search={{ search }}{% endif %}{% if selected_genre %}&genre={{ selected_genre }}{% endif %}">
+                    <i class="bi bi-chevron-left"></i>
+                </a>
+            </li>
+            {% endif %}
+
+            {% for page_num in page_obj.paginator.page_range %}
+            {% if page_num == page_obj.number %}
+            <li class="page-item active">
+                <span class="page-link">{{ page_num }}</span>
+            </li>
+            {% elif page_num > page_obj.number|add:'-3' and page_num < page_obj.number|add:'3' %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_num }}{% if search %}&search={{ search }}{% endif %}{% if selected_genre %}&genre={{ selected_genre }}{% endif %}">
+                    {{ page_num }}
+                </a>
+            </li>
+            {% endif %}
+            {% endfor %}
+
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if search %}&search={{ search }}{% endif %}{% if selected_genre %}&genre={{ selected_genre }}{% endif %}">
+                    <i class="bi bi-chevron-right"></i>
+                </a>
+            </li>
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{% if search %}&search={{ search }}{% endif %}{% if selected_genre %}&genre={{ selected_genre }}{% endif %}">
+                    <i class="bi bi-chevron-double-right"></i>
+                </a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+</div>
+{% endblock %} 

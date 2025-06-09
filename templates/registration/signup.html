@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% load django_bootstrap5 %}
+
+{% block title %}注册 - 个人影视网站{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-6 col-lg-5">
+            <div class="card mt-5">
+                <div class="card-header text-center">
+                    <h3><i class="bi bi-person-plus"></i> 用户注册</h3>
+                </div>
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        {% bootstrap_form form %}
+                        <button type="submit" class="btn btn-success w-100">
+                            <i class="bi bi-check-circle"></i> 注册
+                        </button>
+                    </form>
+                    
+                    <hr>
+                    <div class="text-center">
+                        <p>已有账号？<a href="{% url 'login' %}">立即登录</a></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 

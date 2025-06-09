@@ -1,0 +1,273 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ movie.title }} - 个人影视网站{% endblock %}
+
+{% block extra_css %}
+<style>
+    .video-container {
+        position: relative;
+        background: #000;
+        border-radius: 0.5rem;
+        overflow: hidden;
+    }
+    .progress-container {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(0,0,0,0.7);
+        padding: 10px;
+    }
+    .progress-bar-custom {
+        width: 100%;
+        height: 8px;
+        background: rgba(255,255,255,0.3);
+        border-radius: 4px;
+        overflow: hidden;
+        cursor: pointer;
+    }
+    .progress-fill {
+        height: 100%;
+        background: #007bff;
+        width: 0%;
+        transition: width 0.1s;
+    }
+    .time-display {
+        color: white;
+        font-size: 0.9rem;
+        margin-top: 5px;
+    }
+    .comment-card {
+        border-left: 4px solid #007bff;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row">
+        <!-- 视频播放区域 -->
+        <div class="col-lg-8">
+            <div class="video-container mb-4">
+                <video id="moviePlayer" class="video-player" controls preload="metadata">
+                    <source src="{% url 'serve_video' movie.pk %}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            </div>
+            
+            <!-- 影片信息 -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="mb-0">{{ movie.title }}</h2>
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <p><strong>文件名：</strong> {{ movie.file_name }}</p>
+                            <p><strong>文件大小：</strong> {{ movie.file_size_mb }} MB</p>
+                            {% if movie.duration %}
+                            <p><strong>时长：</strong> {{ movie.duration }}</p>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            {% if movie.genre %}
+                            <p><strong>类型：</strong> 
+                                <span class="badge bg-secondary">{{ movie.genre }}</span>
+                            </p>
+                            {% endif %}
+                            {% if movie.year %}
+                            <p><strong>年份：</strong> {{ movie.year }}</p>
+                            {% endif %}
+                            <p><strong>观看次数：</strong> {{ movie.views }}</p>
+                        </div>
+                    </div>
+                    
+                    {% if movie.description %}
+                    <div class="mb-3">
+                        <h5>简介</h5>
+                        <p>{{ movie.description }}</p>
+                    </div>
+                    {% endif %}
+                    
+                    {% if avg_rating %}
+                    <div class="mb-3">
+                        <h5>平均评分</h5>
+                        <div class="rating-stars">
+                            {% for i in "12345" %}
+                            {% if forloop.counter <= avg_rating %}
+                            <i class="bi bi-star-fill"></i>
+                            {% else %}
+                            <i class="bi bi-star"></i>
+                            {% endif %}
+                            {% endfor %}
+                            <span class="ms-2">{{ avg_rating|floatformat:1 }}/5.0</span>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <!-- 侧边栏 -->
+        <div class="col-lg-4">
+            {% if user.is_authenticated %}
+            <!-- 评分表单 -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="bi bi-star"></i> 为这部影片评分
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <form method="post" action="{% url 'rate_movie' movie.pk %}">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            {{ rating_form.rating.label_tag }}
+                            {{ rating_form.rating }}
+                        </div>
+                        <div class="mb-3">
+                            {{ rating_form.comment.label_tag }}
+                            {{ rating_form.comment }}
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="bi bi-send"></i> 提交评分
+                        </button>
+                    </form>
+                    
+                    {% if user_rating %}
+                    <hr>
+                    <div class="alert alert-info">
+                        <strong>您的评分：</strong>
+                        <div class="rating-stars">
+                            {% for i in "12345" %}
+                            {% if forloop.counter <= user_rating.rating %}
+                            <i class="bi bi-star-fill"></i>
+                            {% else %}
+                            <i class="bi bi-star"></i>
+                            {% endif %}
+                            {% endfor %}
+                        </div>
+                        {% if user_rating.comment %}
+                        <p class="mt-2 mb-0">{{ user_rating.comment }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- 观看进度 -->
+            {% if watch_history and watch_history.progress %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="bi bi-clock-history"></i> 观看进度
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <p>上次观看到：{{ watch_history.progress }}</p>
+                    <button class="btn btn-outline-primary btn-sm" onclick="resumeFromProgress()">
+                        <i class="bi bi-play"></i> 继续观看
+                    </button>
+                </div>
+            </div>
+            {% endif %}
+            {% else %}
+            <!-- 登录提示 -->
+            <div class="card mb-4">
+                <div class="card-body text-center">
+                    <h5>登录后可以</h5>
+                    <ul class="list-unstyled">
+                        <li><i class="bi bi-star text-warning"></i> 评分和评论</li>
+                        <li><i class="bi bi-clock-history text-info"></i> 保存观看进度</li>
+                        <li><i class="bi bi-heart text-danger"></i> 收藏影片</li>
+                    </ul>
+                    <a href="{% url 'login' %}" class="btn btn-primary">立即登录</a>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- 评论区域 -->
+    {% if ratings %}
+    <div class="row mt-4">
+        <div class="col-12">
+            <h4>用户评论</h4>
+            {% for rating in ratings %}
+            <div class="comment-card card mb-3">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <h6 class="card-title">{{ rating.user.username }}</h6>
+                            <div class="rating-stars">
+                                {% for i in "12345" %}
+                                {% if forloop.counter <= rating.rating %}
+                                <i class="bi bi-star-fill"></i>
+                                {% else %}
+                                <i class="bi bi-star"></i>
+                                {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <small class="text-muted">{{ rating.created_at|date:"Y-m-d H:i" }}</small>
+                    </div>
+                    {% if rating.comment %}
+                    <p class="card-text mt-2">{{ rating.comment }}</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const player = document.getElementById('moviePlayer');
+    let progressUpdateInterval;
+    
+    {% if user.is_authenticated %}
+    // 更新观看进度
+    function updateProgress() {
+        if (player.currentTime > 0) {
+            fetch('{% url "update_watch_progress" movie.pk %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'progress=' + Math.floor(player.currentTime)
+            });
+        }
+    }
+    
+    // 开始播放时启动进度更新
+    player.addEventListener('play', function() {
+        progressUpdateInterval = setInterval(updateProgress, 30000); // 每30秒更新一次
+    });
+    
+    // 暂停时停止进度更新
+    player.addEventListener('pause', function() {
+        clearInterval(progressUpdateInterval);
+        updateProgress(); // 立即更新一次
+    });
+    
+    // 页面卸载时更新进度
+    window.addEventListener('beforeunload', function() {
+        updateProgress();
+    });
+    {% endif %}
+    
+    {% if watch_history and watch_history.progress %}
+    // 恢复观看进度
+    window.resumeFromProgress = function() {
+        const progressSeconds = {{ watch_history.progress.total_seconds }};
+        player.currentTime = progressSeconds;
+        player.play();
+    };
+    {% endif %}
+});
+</script>
+{% endblock %} 
