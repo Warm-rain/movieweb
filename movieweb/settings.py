@@ -14,7 +14,23 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-your-secret-key-change-in-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
+# 支持IPv6访问，包括公网IPv6地址 - 硬编码确保配置生效
+ALLOWED_HOSTS = [
+    '127.0.0.1',
+    'localhost', 
+    '::1',
+    '[::1]',
+    '2409:8a62:5952:6b00:d16b:b43d:82cd:2c2b',  # 您的IPv6地址
+    '[2409:8a62:5952:6b00:d16b:b43d:82cd:2c2b]',  # IPv6地址带方括号格式
+    '*',  # 允许任何主机访问（开发环境）
+]
+
+# 备用：如果设置了环境变量，则合并使用
+env_hosts = os.getenv('ALLOWED_HOSTS')
+if env_hosts:
+    additional_hosts = [host.strip() for host in env_hosts.split(',')]
+    ALLOWED_HOSTS.extend(additional_hosts)
+    ALLOWED_HOSTS = list(set(ALLOWED_HOSTS))  # 去重
 
 # Application definition
 INSTALLED_APPS = [

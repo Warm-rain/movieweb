@@ -327,19 +327,86 @@ def movie_detail(request, pk):
 
 
 def serve_video(request, pk):
-    """提供视频文件流服务"""
+    """提供视频文件流服务，支持HTTP Range请求"""
     movie = get_object_or_404(Movie, pk=pk)
     
     if not os.path.exists(movie.file_path):
         raise Http404("视频文件不存在")
     
     try:
-        response = FileResponse(
-            open(movie.file_path, 'rb'),
-            content_type='video/mp4'
-        )
+        import mimetypes
+        from django.http import StreamingHttpResponse
+        
+        # 获取文件信息
+        file_path = movie.file_path
+        file_size = os.path.getsize(file_path)
+        
+        # 确定MIME类型
+        content_type, _ = mimetypes.guess_type(file_path)
+        if not content_type:
+            content_type = 'video/mp4'
+        
+        # 检查是否是Range请求
+        range_header = request.META.get('HTTP_RANGE')
+        
+        if range_header:
+            # 解析Range头
+            range_match = range_header.replace('bytes=', '').split('-')
+            start = int(range_match[0]) if range_match[0] else 0
+            end = int(range_match[1]) if range_match[1] else file_size - 1
+            
+            # 确保范围有效
+            start = max(0, start)
+            end = min(file_size - 1, end)
+            content_length = end - start + 1
+            
+            # 创建文件迭代器
+            def file_iterator(file_path, start, chunk_size=8192):
+                with open(file_path, 'rb') as f:
+                    f.seek(start)
+                    remaining = content_length
+                    while remaining > 0:
+                        chunk_size = min(chunk_size, remaining)
+                        data = f.read(chunk_size)
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+            
+            # 创建206 Partial Content响应
+            response = StreamingHttpResponse(
+                file_iterator(file_path, start),
+                status=206,
+                content_type=content_type
+            )
+            response['Content-Length'] = str(content_length)
+            response['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+            response['Accept-Ranges'] = 'bytes'
+            
+        else:
+            # 普通请求，返回整个文件
+            def file_iterator(file_path, chunk_size=8192):
+                with open(file_path, 'rb') as f:
+                    while True:
+                        data = f.read(chunk_size)
+                        if not data:
+                            break
+                        yield data
+            
+            response = StreamingHttpResponse(
+                file_iterator(file_path),
+                content_type=content_type
+            )
+            response['Content-Length'] = str(file_size)
+            response['Accept-Ranges'] = 'bytes'
+        
+        # 设置缓存和其他头
         response['Content-Disposition'] = f'inline; filename="{movie.file_name}"'
+        response['Cache-Control'] = 'no-cache'
+        response['X-Content-Type-Options'] = 'nosniff'
+        
         return response
+        
     except Exception as e:
         raise Http404(f"无法播放视频: {str(e)}")
 

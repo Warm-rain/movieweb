@@ -13,7 +13,7 @@
 
 ## 环境要求
 
-- Python 3.8+
+- Python 3.13+
 - FFmpeg（用于缩略图生成）
 - Windows 10/11
 
