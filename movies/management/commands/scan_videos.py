@@ -1,6 +1,7 @@
 import os
 import subprocess
 import json
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
@@ -46,6 +47,10 @@ class Command(BaseCommand):
         if generate_thumbnails and not ffmpeg_available:
             self.stdout.write(
                 self.style.WARNING('FFmpeg not found. Thumbnails will not be generated.')
+            )
+        elif generate_thumbnails and ffmpeg_available:
+            self.stdout.write(
+                self.style.SUCCESS('FFmpeg found. Thumbnails will be generated.')
             )
 
         added_count = 0
@@ -114,8 +119,13 @@ class Command(BaseCommand):
             self.stdout.write(f'Updated: {file_name}')
             result = 'updated'
         else:
-            return 'skipped'
-
+            # 即使不更新，也检查是否需要生成缩略图
+            if generate_thumbnails and not movie.thumbnail:
+                self.generate_thumbnail(movie)
+                result = 'thumbnail_generated'
+            else:
+                result = 'skipped'
+                
         # 获取视频信息
         if created or update_existing:
             self.extract_video_info(movie)
@@ -158,32 +168,59 @@ class Command(BaseCommand):
     def generate_thumbnail(self, movie):
         """生成视频缩略图"""
         try:
-            # 创建临时文件名
-            thumbnail_path = f'/tmp/thumb_{movie.pk}.jpg'
+            # 使用临时文件
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                thumbnail_path = tmp_file.name
             
-            # 使用ffmpeg生成缩略图（从视频10%位置截取）
+            # 使用ffmpeg生成缩略图（从视频30秒位置截取）
             cmd = [
                 'ffmpeg', '-i', movie.file_path,
                 '-ss', '00:00:30',  # 从30秒位置截取
                 '-vframes', '1',
+                '-f', 'image2',
                 '-y',  # 覆盖输出文件
                 thumbnail_path
             ]
             
-            subprocess.run(cmd, capture_output=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
-            # 将缩略图保存到模型
-            if os.path.exists(thumbnail_path):
+            if result.returncode == 0 and os.path.exists(thumbnail_path):
+                # 将缩略图保存到模型
                 with open(thumbnail_path, 'rb') as f:
                     thumbnail_name = f'{movie.pk}_thumb.jpg'
-                    movie.thumbnail.save(thumbnail_name, ContentFile(f.read()))
+                    movie.thumbnail.save(thumbnail_name, ContentFile(f.read()), save=True)
                 
                 # 删除临时文件
-                os.remove(thumbnail_path)
+                try:
+                    os.unlink(thumbnail_path)
+                except:
+                    pass
                 
                 self.stdout.write(f'Generated thumbnail for: {movie.title}')
+            else:
+                # 如果30秒位置失败，尝试从10秒位置
+                cmd[4] = '00:00:10'
+                result = subprocess.run(cmd, capture_output=True, text=True)
                 
-        except (subprocess.CalledProcessError, FileNotFoundError):
+                if result.returncode == 0 and os.path.exists(thumbnail_path):
+                    with open(thumbnail_path, 'rb') as f:
+                        thumbnail_name = f'{movie.pk}_thumb.jpg'
+                        movie.thumbnail.save(thumbnail_name, ContentFile(f.read()), save=True)
+                    
+                    try:
+                        os.unlink(thumbnail_path)
+                    except:
+                        pass
+                    
+                    self.stdout.write(f'Generated thumbnail for: {movie.title} (10s position)')
+                else:
+                    self.stdout.write(
+                        self.style.WARNING(f'Failed to generate thumbnail for: {movie.title}')
+                    )
+                    if result.stderr:
+                        self.stdout.write(f'FFmpeg error: {result.stderr}')
+                
+        except Exception as e:
             self.stdout.write(
-                self.style.WARNING(f'Failed to generate thumbnail for: {movie.title}')
+                self.style.WARNING(f'Failed to generate thumbnail for: {movie.title} - {str(e)}')
             ) 
