@@ -1,226 +1,264 @@
 import os
-import subprocess
 import json
 import tempfile
 from datetime import timedelta
-from pathlib import Path
-from django.core.management.base import BaseCommand, CommandError
-from django.conf import settings
+from django.core.management.base import BaseCommand
 from django.core.files.base import ContentFile
-from movies.models import Movie
+from django.utils import timezone
+from movies.models import Movie, Series
+from movies.scraper import VideoScraper
+import ffmpeg
+import requests
 
 
 class Command(BaseCommand):
-    help = 'Scan directory for video files and add them to database'
+    help = '扫描指定目录下的视频文件并添加到数据库，支持刮削封面和剧集分组'
 
     def add_arguments(self, parser):
+        parser.add_argument('directory', type=str, help='要扫描的目录路径')
         parser.add_argument(
-            'directory',
-            nargs='?',
-            type=str,
-            default=settings.VIDEO_ROOT_PATH,
-            help='Directory to scan for video files'
+            '--scrape',
+            action='store_true',
+            help='启用刮削功能获取封面和信息',
         )
         parser.add_argument(
-            '--update',
+            '--overwrite',
             action='store_true',
-            help='Update existing movies metadata',
-        )
-        parser.add_argument(
-            '--generate-thumbnails',
-            action='store_true',
-            help='Generate thumbnails for videos using ffmpeg',
+            help='覆盖已存在的电影记录',
         )
 
     def handle(self, *args, **options):
         directory = options['directory']
-        update_existing = options['update']
-        generate_thumbnails = options['generate_thumbnails']
-
-        if not os.path.exists(directory):
-            raise CommandError(f'Directory "{directory}" does not exist.')
-
-        self.stdout.write(f'Scanning directory: {directory}')
+        enable_scraping = options['scrape']
+        overwrite = options['overwrite']
         
-        # 检查ffmpeg是否可用
-        ffmpeg_available = self.check_ffmpeg() if generate_thumbnails else False
-        if generate_thumbnails and not ffmpeg_available:
-            self.stdout.write(
-                self.style.WARNING('FFmpeg not found. Thumbnails will not be generated.')
-            )
-        elif generate_thumbnails and ffmpeg_available:
-            self.stdout.write(
-                self.style.SUCCESS('FFmpeg found. Thumbnails will be generated.')
-            )
+        if not os.path.exists(directory):
+            self.stdout.write(self.style.ERROR(f'目录不存在: {directory}'))
+            return
 
+        self.stdout.write(f'开始扫描目录: {directory}')
+        if enable_scraping:
+            self.stdout.write('已启用刮削功能')
+        
+        # 初始化刮削器
+        scraper = VideoScraper() if enable_scraping else None
+        
+        # 支持的视频格式
+        video_extensions = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v']
+        
         added_count = 0
         updated_count = 0
         error_count = 0
-
+        
         for root, dirs, files in os.walk(directory):
             for file in files:
                 file_path = os.path.join(root, file)
                 file_ext = os.path.splitext(file)[1].lower()
                 
-                if file_ext in settings.VIDEO_EXTENSIONS:
+                if file_ext in video_extensions:
                     try:
                         result = self.process_video_file(
-                            file_path, 
-                            update_existing, 
-                            generate_thumbnails and ffmpeg_available
+                            file_path, scraper, overwrite, enable_scraping
                         )
                         if result == 'added':
                             added_count += 1
                         elif result == 'updated':
                             updated_count += 1
                     except Exception as e:
-                        error_count += 1
                         self.stdout.write(
-                            self.style.ERROR(f'Error processing {file_path}: {str(e)}')
+                            self.style.ERROR(f'处理文件出错 {file_path}: {str(e)}')
                         )
+                        error_count += 1
 
         self.stdout.write(
             self.style.SUCCESS(
-                f'Scan completed. Added: {added_count}, Updated: {updated_count}, Errors: {error_count}'
+                f'扫描完成! 新增: {added_count}, 更新: {updated_count}, 错误: {error_count}'
             )
         )
 
-    def check_ffmpeg(self):
-        """检查ffmpeg是否可用"""
-        try:
-            subprocess.run(['ffmpeg', '-version'], 
-                         capture_output=True, check=True)
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
-
-    def process_video_file(self, file_path, update_existing, generate_thumbnails):
+    def process_video_file(self, file_path, scraper, overwrite, enable_scraping):
         """处理单个视频文件"""
-        file_name = os.path.basename(file_path)
-        title = os.path.splitext(file_name)[0]
         file_size = os.path.getsize(file_path)
-
+        filename = os.path.basename(file_path)
+        
         # 检查是否已存在
-        movie, created = Movie.objects.get_or_create(
-            file_path=file_path,
-            defaults={
-                'title': title,
-                'file_size': file_size,
-            }
-        )
-
-        if created:
-            self.stdout.write(f'Added: {file_name}')
-            result = 'added'
-        elif update_existing:
-            movie.title = title
-            movie.file_size = file_size
-            movie.save()
-            self.stdout.write(f'Updated: {file_name}')
-            result = 'updated'
-        else:
-            # 即使不更新，也检查是否需要生成缩略图
-            if generate_thumbnails and not movie.thumbnail:
-                self.generate_thumbnail(movie)
-                result = 'thumbnail_generated'
-            else:
-                result = 'skipped'
-                
+        existing_movie = Movie.objects.filter(file_path=file_path).first()
+        if existing_movie and not overwrite:
+            self.stdout.write(f'跳过已存在的文件: {filename}')
+            return 'skipped'
+        
         # 获取视频信息
-        if created or update_existing:
-            self.extract_video_info(movie)
-
-        # 生成缩略图
-        if generate_thumbnails and (created or update_existing or not movie.thumbnail):
-            self.generate_thumbnail(movie)
-
-        return result
-
-    def extract_video_info(self, movie):
-        """使用ffprobe提取视频信息"""
         try:
-            # 获取视频时长
-            cmd = [
-                'ffprobe', '-v', 'quiet', '-print_format', 'json', 
-                '-show_format', '-show_streams', movie.file_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            probe = ffmpeg.probe(file_path)
+            video_info = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+            duration_seconds = float(probe['format']['duration'])
+            duration = timedelta(seconds=duration_seconds)
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f'无法获取视频信息 {filename}: {e}'))
+            duration = None
+        
+        # 初始化电影数据
+        movie_data = {
+            'title': os.path.splitext(filename)[0],
+            'file_path': file_path,
+            'file_size': file_size,
+            'duration': duration,
+        }
+        
+        series = None
+        scrape_result = None
+        
+        # 如果启用刮削功能
+        if enable_scraping and scraper:
+            self.stdout.write(f'正在刮削: {filename}')
+            scrape_result = scraper.scrape_video_info(file_path)
             
-            data = json.loads(result.stdout)
-            
-            # 提取时长
-            if 'format' in data and 'duration' in data['format']:
-                duration_seconds = float(data['format']['duration'])
-                movie.duration = timedelta(seconds=duration_seconds)
-            
-            # 尝试从文件名提取年份
-            import re
-            year_match = re.search(r'(19|20)\d{2}', movie.title)
-            if year_match:
-                movie.year = int(year_match.group())
-            
-            movie.save()
-            
-        except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError):
-            # 如果ffprobe不可用，跳过
-            pass
-
-    def generate_thumbnail(self, movie):
-        """生成视频缩略图"""
-        try:
-            # 使用临时文件
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                thumbnail_path = tmp_file.name
-            
-            # 使用ffmpeg生成缩略图（从视频30秒位置截取）
-            cmd = [
-                'ffmpeg', '-i', movie.file_path,
-                '-ss', '00:00:30',  # 从30秒位置截取
-                '-vframes', '1',
-                '-f', 'image2',
-                '-y',  # 覆盖输出文件
-                thumbnail_path
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0 and os.path.exists(thumbnail_path):
-                # 将缩略图保存到模型
-                with open(thumbnail_path, 'rb') as f:
-                    thumbnail_name = f'{movie.pk}_thumb.jpg'
-                    movie.thumbnail.save(thumbnail_name, ContentFile(f.read()), save=True)
+            if scrape_result['success']:
+                self.stdout.write(self.style.SUCCESS(f'✓ {scrape_result["message"]}'))
                 
-                # 删除临时文件
-                try:
-                    os.unlink(thumbnail_path)
-                except:
-                    pass
-                
-                self.stdout.write(f'Generated thumbnail for: {movie.title}')
-            else:
-                # 如果30秒位置失败，尝试从10秒位置
-                cmd[4] = '00:00:10'
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                
-                if result.returncode == 0 and os.path.exists(thumbnail_path):
-                    with open(thumbnail_path, 'rb') as f:
-                        thumbnail_name = f'{movie.pk}_thumb.jpg'
-                        movie.thumbnail.save(thumbnail_name, ContentFile(f.read()), save=True)
+                if scrape_result['is_series']:
+                    # 处理电视剧
+                    series = scrape_result['series']
+                    series_info = scrape_result['series_info']
                     
-                    try:
-                        os.unlink(thumbnail_path)
-                    except:
-                        pass
+                    movie_data.update({
+                        'series': series,
+                        'episode_number': series_info['episode_number'],
+                        'season_number': series_info['season_number'],
+                        'title': series_info.get('episode_title') or movie_data['title'],
+                    })
                     
-                    self.stdout.write(f'Generated thumbnail for: {movie.title} (10s position)')
+                    # 从剧集信息更新
+                    if scrape_result['movie_data']:
+                        tv_details = scrape_result['movie_data']
+                        movie_data.update({
+                            'description': tv_details.get('overview', ''),
+                            'genre': ', '.join([genre['name'] for genre in tv_details.get('genres', [])]),
+                            'year': int(tv_details.get('first_air_date', '1900-01-01')[:4]) if tv_details.get('first_air_date') else None,
+                            'rating': tv_details.get('vote_average', 0),
+                            'tmdb_id': tv_details.get('id'),
+                        })
                 else:
-                    self.stdout.write(
-                        self.style.WARNING(f'Failed to generate thumbnail for: {movie.title}')
-                    )
-                    if result.stderr:
-                        self.stdout.write(f'FFmpeg error: {result.stderr}')
+                    # 处理电影
+                    if scrape_result['movie_data']:
+                        movie_details = scrape_result['movie_data']
+                        movie_data.update({
+                            'title': movie_details.get('title', movie_data['title']),
+                            'original_title': movie_details.get('original_title', ''),
+                            'description': movie_details.get('overview', ''),
+                            'genre': ', '.join([genre['name'] for genre in movie_details.get('genres', [])]),
+                            'year': int(movie_details.get('release_date', '1900-01-01')[:4]) if movie_details.get('release_date') else None,
+                            'rating': movie_details.get('vote_average', 0),
+                            'tmdb_id': movie_details.get('id'),
+                            'poster_url': scraper.get_image_url(movie_details.get('poster_path', '')),
+                        })
+            else:
+                self.stdout.write(self.style.WARNING(f'✗ {scrape_result["message"]}'))
+        
+        # 创建或更新电影记录
+        if existing_movie:
+            for key, value in movie_data.items():
+                setattr(existing_movie, key, value)
+            movie = existing_movie
+            movie.save()
+            action = 'updated'
+        else:
+            movie = Movie.objects.create(**movie_data)
+            action = 'added'
+        
+        # 生成缩略图
+        self.generate_thumbnail(movie, scrape_result)
+        
+        self.stdout.write(f'{"更新" if action == "updated" else "添加"}: {movie.title}')
+        return action
+
+    def generate_thumbnail(self, movie, scrape_result=None):
+        """生成或下载缩略图"""
+        try:
+            # 如果有刮削结果且是电影，尝试下载海报
+            if (scrape_result and not scrape_result['is_series'] and 
+                scrape_result.get('movie_data') and movie.poster_url):
                 
+                response = requests.get(movie.poster_url, timeout=30)
+                if response.status_code == 200:
+                    poster_file = ContentFile(response.content)
+                    movie.poster_image.save(
+                        f"movie_{movie.id}_poster.jpg",
+                        poster_file,
+                        save=True
+                    )
+                    self.stdout.write(f'✓ 下载海报: {movie.title}')
+                    return
+            
+            # 如果是剧集且有系列海报，跳过缩略图生成
+            if movie.series and movie.series.poster_image:
+                self.stdout.write(f'✓ 使用剧集海报: {movie.title}')
+                return
+            
+            # 生成FFmpeg缩略图作为备用
+            self.generate_ffmpeg_thumbnail(movie)
+            
         except Exception as e:
             self.stdout.write(
-                self.style.WARNING(f'Failed to generate thumbnail for: {movie.title} - {str(e)}')
-            ) 
+                self.style.WARNING(f'缩略图处理失败 {movie.title}: {e}')
+            )
+
+    def generate_ffmpeg_thumbnail(self, movie):
+        """使用FFmpeg生成缩略图"""
+        try:
+            # 使用临时文件避免路径问题
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                temp_path = temp_file.name
+            
+            try:
+                # 尝试在30秒处截取
+                (
+                    ffmpeg
+                    .input(movie.file_path, ss=30)
+                    .output(temp_path, vframes=1, format='image2', vcodec='mjpeg')
+                    .overwrite_output()
+                    .run(capture_stdout=True, capture_stderr=True)
+                )
+            except ffmpeg.Error:
+                try:
+                    # 如果30秒失败，尝试10秒处截取
+                    (
+                        ffmpeg
+                        .input(movie.file_path, ss=10)
+                        .output(temp_path, vframes=1, format='image2', vcodec='mjpeg')
+                        .overwrite_output()
+                        .run(capture_stdout=True, capture_stderr=True)
+                    )
+                except ffmpeg.Error:
+                    # 最后尝试在开始处截取
+                    (
+                        ffmpeg
+                        .input(movie.file_path, ss=1)
+                        .output(temp_path, vframes=1, format='image2', vcodec='mjpeg')
+                        .overwrite_output()
+                        .run(capture_stdout=True, capture_stderr=True)
+                    )
+            
+            # 检查文件是否生成成功
+            if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                with open(temp_path, 'rb') as f:
+                    thumbnail_file = ContentFile(f.read())
+                    movie.thumbnail.save(
+                        f"thumb_{movie.id}.jpg",
+                        thumbnail_file,
+                        save=True
+                    )
+                self.stdout.write(f'✓ 生成缩略图: {movie.title}')
+            else:
+                self.stdout.write(
+                    self.style.WARNING(f'缩略图文件生成失败: {movie.title}')
+                )
+            
+        except Exception as e:
+            self.stdout.write(
+                self.style.WARNING(f'FFmpeg缩略图生成失败 {movie.title}: {e}')
+            )
+        finally:
+            # 清理临时文件
+            if os.path.exists(temp_path):
+                os.unlink(temp_path) 

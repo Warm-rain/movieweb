@@ -95,7 +95,7 @@
             <h3 class="text-muted mt-3">暂无影片</h3>
             <p class="text-muted">
                 {% if search or selected_genre %}
-                没有找到符合条件的影片。<a href="{% url 'movie_list' %}">查看所有影片</a>
+                没有找到符合条件的影片。<a href="{% url 'index' %}">查看所有影片</a>
                 {% else %}
                 还没有扫描到任何影片，请使用管理命令扫描视频文件。
                 {% endif %}

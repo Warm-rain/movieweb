@@ -1,0 +1,363 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}{{ series.title }} - 剧集详情{% endblock %}
+
+{% block extra_css %}
+<style>
+.series-header {
+    background: linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0.7)), 
+                url('{{ series.backdrop_url }}') center/cover;
+    min-height: 400px;
+    color: white;
+    position: relative;
+}
+
+.series-info {
+    background: rgba(0,0,0,0.8);
+    padding: 30px;
+    border-radius: 10px;
+}
+
+.poster-image {
+    width: 250px;
+    height: 350px;
+    object-fit: cover;
+    border-radius: 10px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+}
+
+.episode-card {
+    transition: all 0.3s ease;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.episode-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+}
+
+.episode-thumbnail {
+    width: 100%;
+    height: 120px;
+    object-fit: cover;
+    background: linear-gradient(45deg, #f8f9fa, #e9ecef);
+}
+
+.episode-overlay {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(0,0,0,0.8);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.75em;
+}
+
+.rating-display {
+    background: rgba(255,193,7,0.1);
+    border: 1px solid #ffc107;
+    color: #ffc107;
+    padding: 8px 12px;
+    border-radius: 20px;
+    display: inline-block;
+}
+
+.genre-tag {
+    background: rgba(0,123,255,0.1);
+    border: 1px solid #007bff;
+    color: #007bff;
+    padding: 4px 12px;
+    border-radius: 15px;
+    margin: 2px;
+    display: inline-block;
+    font-size: 0.85em;
+}
+
+.season-tabs {
+    border-bottom: 2px solid #dee2e6;
+    margin-bottom: 2rem;
+}
+
+.season-tab {
+    border: none;
+    background: transparent;
+    padding: 10px 20px;
+    color: #6c757d;
+    border-bottom: 3px solid transparent;
+    transition: all 0.3s ease;
+}
+
+.season-tab.active {
+    color: #007bff;
+    border-bottom-color: #007bff;
+}
+
+.season-tab:hover {
+    color: #007bff;
+    background: rgba(0,123,255,0.05);
+}
+
+.progress-indicator {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 4px;
+    background: #007bff;
+    transition: width 0.3s ease;
+}
+
+.continue-watching {
+    background: linear-gradient(45deg, #28a745, #20c997);
+    border: none;
+    box-shadow: 0 4px 15px rgba(40,167,69,0.3);
+}
+
+.continue-watching:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(40,167,69,0.4);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- 剧集头部信息 -->
+<div class="series-header d-flex align-items-end">
+    <div class="container">
+        <div class="row">
+            <div class="col-md-3">
+                {% if series.poster_image %}
+                    <img src="{{ series.poster_image.url }}" class="poster-image" alt="{{ series.title }}">
+                {% elif series.poster_url %}
+                    <img src="{{ series.poster_url }}" class="poster-image" alt="{{ series.title }}">
+                {% else %}
+                    <div class="poster-image bg-secondary d-flex align-items-center justify-content-center">
+                        <i class="fas fa-video fa-3x text-light"></i>
+                    </div>
+                {% endif %}
+            </div>
+            <div class="col-md-9">
+                <div class="series-info">
+                    <h1 class="display-4 mb-3">{{ series.title }}</h1>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-8">
+                            {% if series.year %}
+                                <span class="badge bg-primary me-2">{{ series.year }}</span>
+                            {% endif %}
+                            {% if series.status %}
+                                <span class="badge bg-info me-2">{{ series.status }}</span>
+                            {% endif %}
+                            <span class="badge bg-success">{{ total_episodes }} 集</span>
+                        </div>
+                        <div class="col-md-4 text-md-end">
+                            {% if series.vote_average %}
+                                <div class="rating-display">
+                                    <i class="fas fa-star"></i> {{ series.vote_average|floatformat:1 }}/10
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    {% if series.overview %}
+                        <p class="lead mb-3">{{ series.overview }}</p>
+                    {% endif %}
+                    
+                    {% if series.genres %}
+                        <div class="mb-3">
+                            {% for genre in series.genres %}
+                                <span class="genre-tag">{{ genre }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    
+                    <!-- 继续观看按钮 -->
+                    {% if last_watched %}
+                        <a href="{% url 'movie_detail' last_watched.pk %}" 
+                           class="btn btn-success btn-lg continue-watching me-3">
+                            <i class="fas fa-play"></i> 继续观看 S{{ last_watched.season_number|default:1|stringformat:"02d" }}E{{ last_watched.episode_number|stringformat:"02d" }}
+                        </a>
+                    {% endif %}
+                    
+                    {% if episodes %}
+                        <a href="{% url 'movie_detail' episodes.first.pk %}" 
+                           class="btn btn-outline-light btn-lg">
+                            <i class="fas fa-redo"></i> 从头开始
+                        </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container mt-4">
+    <!-- 季度切换标签 -->
+    {% if seasons|length > 1 %}
+        <div class="season-tabs mb-4">
+            {% for season in seasons %}
+                <button class="season-tab {% if season == current_season %}active{% endif %}" 
+                        data-season="{{ season }}">
+                    第 {{ season }} 季 ({{ season_episodes_count|default:0 }} 集)
+                </button>
+            {% endfor %}
+        </div>
+    {% endif %}
+    
+    <!-- 剧集列表 -->
+    <div class="row" id="episodes-container">
+        {% for episode in episodes %}
+            <div class="col-lg-3 col-md-4 col-sm-6 mb-4 episode-item" data-season="{{ episode.season_number|default:1 }}">
+                <div class="card episode-card h-100">
+                    <div class="position-relative">
+                        {% if episode.thumbnail %}
+                            <img src="{{ episode.thumbnail.url }}" class="episode-thumbnail" alt="{{ episode.display_title }}">
+                        {% elif series.poster_image %}
+                            <img src="{{ series.poster_image.url }}" class="episode-thumbnail" alt="{{ episode.display_title }}">
+                        {% else %}
+                            <div class="episode-thumbnail d-flex align-items-center justify-content-center bg-light">
+                                <i class="fas fa-play-circle fa-2x text-muted"></i>
+                            </div>
+                        {% endif %}
+                        
+                        <div class="episode-overlay">
+                            S{{ episode.season_number|default:1|stringformat:"02d" }}E{{ episode.episode_number|stringformat:"02d" }}
+                        </div>
+                        
+                        <!-- 观看进度条 -->
+                        {% if episode.watch_progress > 0 %}
+                            <div class="progress-indicator" style="width: {{ episode.watch_progress }}%"></div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="card-body">
+                        <h6 class="card-title">
+                            第 {{ episode.episode_number|default:"?" }} 集
+                        </h6>
+                        <p class="card-text small text-muted">
+                            <i class="fas fa-clock"></i> {{ episode.duration|default:"未知时长" }}
+                            <br>
+                            <i class="fas fa-hdd"></i> {{ episode.file_size_mb }} MB
+                        </p>
+                        
+                        {% if episode.description %}
+                            <p class="card-text small">{{ episode.description|truncatechars:80 }}</p>
+                        {% endif %}
+                        
+                        <!-- 评分 -->
+                        {% if episode.avg_rating %}
+                            <div class="mb-2">
+                                {% for i in "12345" %}
+                                    {% if forloop.counter <= episode.avg_rating %}
+                                        <small class="text-warning"><i class="fas fa-star"></i></small>
+                                    {% else %}
+                                        <small class="text-muted"><i class="far fa-star"></i></small>
+                                    {% endif %}
+                                {% endfor %}
+                                <small class="text-muted ms-1">{{ episode.avg_rating|floatformat:1 }}</small>
+                            </div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="card-footer bg-transparent">
+                        <a href="{% url 'movie_detail' episode.pk %}" class="btn btn-primary btn-sm w-100">
+                            {% if episode.watch_progress > 0 and episode.watch_progress < 90 %}
+                                <i class="fas fa-play"></i> 继续观看
+                            {% elif episode.watch_progress >= 90 %}
+                                <i class="fas fa-redo"></i> 重新观看
+                            {% else %}
+                                <i class="fas fa-play"></i> 开始观看
+                            {% endif %}
+                        </a>
+                    </div>
+                </div>
+            </div>
+        {% empty %}
+            <div class="col-12">
+                <div class="text-center py-5">
+                    <i class="fas fa-video fa-3x text-muted mb-3"></i>
+                    <h5 class="text-muted">暂无剧集</h5>
+                    <p class="text-muted">此系列还没有可播放的剧集</p>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+    
+    <!-- 分页 -->
+    {% if page_obj.has_other_pages %}
+        <nav aria-label="剧集分页" class="mt-4">
+            <ul class="pagination justify-content-center">
+                {% if page_obj.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}&season={{ current_season }}">
+                            <i class="fas fa-chevron-left"></i> 上一页
+                        </a>
+                    </li>
+                {% endif %}
+                
+                {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                        <li class="page-item active">
+                            <span class="page-link">{{ num }}</span>
+                        </li>
+                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ num }}&season={{ current_season }}">{{ num }}</a>
+                        </li>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if page_obj.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.next_page_number }}&season={{ current_season }}">
+                            下一页 <i class="fas fa-chevron-right"></i>
+                        </a>
+                    </li>
+                {% endif %}
+            </ul>
+        </nav>
+    {% endif %}
+    
+    <!-- 返回按钮 -->
+    <div class="mt-4 mb-5">
+        <a href="{% url 'index' %}?view=series" class="btn btn-outline-secondary">
+            <i class="fas fa-arrow-left"></i> 返回剧集列表
+        </a>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 季度切换功能
+    const seasonTabs = document.querySelectorAll('.season-tab');
+    const episodeItems = document.querySelectorAll('.episode-item');
+    
+    seasonTabs.forEach(tab => {
+        tab.addEventListener('click', function() {
+            const selectedSeason = this.dataset.season;
+            
+            // 更新选中状态
+            seasonTabs.forEach(t => t.classList.remove('active'));
+            this.classList.add('active');
+            
+            // 显示/隐藏对应季度的剧集
+            episodeItems.forEach(item => {
+                const itemSeason = item.dataset.season;
+                if (selectedSeason === 'all' || itemSeason === selectedSeason) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+            
+            // 更新URL
+            const url = new URL(window.location);
+            url.searchParams.set('season', selectedSeason);
+            window.history.pushState({}, '', url);
+        });
+    });
+});
+</script>
+{% endblock %} 

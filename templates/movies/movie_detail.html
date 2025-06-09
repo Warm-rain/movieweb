@@ -233,7 +233,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 更新观看进度
     function updateProgress() {
         if (player.currentTime > 0) {
-            fetch('{% url "update_watch_progress" movie.pk %}', {
+            fetch('{% url "update_progress" movie.pk %}', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
