@@ -10,4 +10,17 @@ urlpatterns = [
     path('movie/<int:pk>/rate/', views.rate_movie, name='rate_movie'),
     path('movie/<int:pk>/progress/', views.update_progress, name='update_progress'),
     path('history/', views.watch_history_view, name='watch_history'),
+    
+    # GPU硬解转码相关路由
+    path('movie/<int:pk>/resolutions/', views.get_video_resolutions, name='get_video_resolutions'),
+    path('movie/<int:pk>/transcode/', views.start_transcoding, name='start_transcoding'),
+    path('transcode/status/<str:transcode_id>/', views.get_transcode_status, name='get_transcode_status'),
+    path('movie/<int:pk>/hls/<str:resolution>/', views.serve_hls_video, name='serve_hls_video'),
+    path('movie/<int:pk>/hls/<str:resolution>/<str:filename>', views.serve_hls_segment, name='serve_hls_segment'),
+    path('management/cleanup-transcodes/', views.cleanup_transcodes, name='cleanup_transcodes'),
+    
+    # 视频扫描管理路由
+    path('management/scan-videos/', views.scan_videos_page, name='scan_videos_page'),
+    path('management/scan-videos/start/', views.start_scan_videos, name='start_scan_videos'),
+    path('management/scan-videos/status/', views.get_scan_status, name='get_scan_status'),
 ] 

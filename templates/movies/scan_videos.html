@@ -1,0 +1,534 @@
+{% extends 'base.html' %}
+
+{% block title %}视频扫描管理{% endblock %}
+
+{% block extra_css %}
+<style>
+    .scan-card {
+        border: none;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        border-radius: 12px;
+        margin-bottom: 20px;
+    }
+    
+    .scan-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 12px 12px 0 0;
+        padding: 20px;
+    }
+    
+    .scan-form {
+        padding: 30px;
+    }
+    
+    .form-group {
+        margin-bottom: 20px;
+    }
+    
+    .form-label {
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 8px;
+        display: block;
+    }
+    
+    .form-control {
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        padding: 12px 15px;
+        font-size: 14px;
+        transition: all 0.3s ease;
+    }
+    
+    .form-control:focus {
+        border-color: #667eea;
+        box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+    }
+    
+    .form-check {
+        margin-bottom: 15px;
+    }
+    
+    .form-check-input {
+        margin-top: 0.25rem;
+    }
+    
+    .form-check-label {
+        font-weight: 500;
+        color: #555;
+    }
+    
+    .btn-scan {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border: none;
+        color: white;
+        padding: 12px 30px;
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+    
+    .btn-scan:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        color: white;
+    }
+    
+    .btn-scan:disabled {
+        background: #6c757d;
+        transform: none;
+        box-shadow: none;
+    }
+    
+    .status-card {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    
+    .status-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+    
+    .status-value {
+        font-weight: 600;
+        color: #667eea;
+    }
+    
+    .alert-scan {
+        border: none;
+        border-radius: 8px;
+        padding: 15px 20px;
+        margin-bottom: 20px;
+    }
+    
+    .progress-custom {
+        height: 8px;
+        border-radius: 4px;
+        background: #e9ecef;
+        overflow: hidden;
+    }
+    
+    .progress-bar-custom {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        border-radius: 4px;
+        transition: width 0.3s ease;
+        animation: progress-animation 2s ease-in-out infinite;
+    }
+    
+    @keyframes progress-animation {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+    
+    .recent-movies {
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    
+    .movie-item {
+        display: flex;
+        align-items: center;
+        padding: 10px;
+        border-bottom: 1px solid #e9ecef;
+        transition: background 0.2s ease;
+    }
+    
+    .movie-item:hover {
+        background: #f8f9fa;
+    }
+    
+    .movie-item:last-child {
+        border-bottom: none;
+    }
+    
+    .movie-info {
+        flex: 1;
+        margin-left: 15px;
+    }
+    
+    .movie-title {
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 5px;
+    }
+    
+    .movie-meta {
+        font-size: 12px;
+        color: #666;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row">
+        <!-- 扫描表单 -->
+        <div class="col-lg-8">
+            <div class="card scan-card">
+                <div class="scan-header">
+                    <h3 class="mb-0">
+                        <i class="fas fa-search"></i> 视频扫描管理
+                    </h3>
+                    <p class="mb-0 mt-2">扫描本地视频文件并添加到影视库</p>
+                </div>
+                <div class="scan-form">
+                    <!-- 扫描状态提示 -->
+                    <div id="scanAlert" style="display: none;"></div>
+                    
+                    <form id="scanForm">
+                        {% csrf_token %}
+                        <div class="form-group">
+                            <label class="form-label">
+                                <i class="fas fa-folder"></i> 扫描目录
+                            </label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="directory" 
+                                   placeholder="例如: D:\Videos 或 D:\qbittorrent"
+                                   value="D:\qbittorrent"
+                                   required>
+                            <small class="form-text text-muted">
+                                输入要扫描的视频文件夹路径
+                            </small>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" 
+                                           type="checkbox" 
+                                           id="enableScraping">
+                                    <label class="form-check-label" for="enableScraping">
+                                        <i class="fas fa-download"></i> 启用刮削功能
+                                    </label>
+                                    <small class="form-text text-muted d-block">
+                                        从TMDB获取电影信息和海报
+                                    </small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" 
+                                           type="checkbox" 
+                                           id="generateThumbnails"
+                                           checked>
+                                    <label class="form-check-label" for="generateThumbnails">
+                                        <i class="fas fa-image"></i> 生成缩略图
+                                    </label>
+                                    <small class="form-text text-muted d-block">
+                                        使用FFmpeg生成视频缩略图
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-check">
+                            <input class="form-check-input" 
+                                   type="checkbox" 
+                                   id="overwrite">
+                            <label class="form-check-label" for="overwrite">
+                                <i class="fas fa-sync"></i> 覆盖已存在的记录
+                            </label>
+                            <small class="form-text text-muted d-block">
+                                更新已经存在的视频文件信息
+                            </small>
+                        </div>
+                        
+                        <!-- 扫描进度 -->
+                        <div id="scanProgress" style="display: none;">
+                            <div class="progress-custom mb-3">
+                                <div class="progress-bar-custom" style="width: 100%;"></div>
+                            </div>
+                            <p class="text-center">
+                                <i class="fas fa-spinner fa-spin"></i> 
+                                正在扫描视频文件，请稍候...
+                            </p>
+                        </div>
+                        
+                        <div class="text-center">
+                            <button type="submit" class="btn btn-scan" id="scanBtn">
+                                <i class="fas fa-play"></i> 开始扫描
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 状态信息 -->
+        <div class="col-lg-4">
+            <!-- 统计信息 -->
+            <div class="card scan-card">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-chart-bar"></i> 影视库统计
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="status-card">
+                        <div class="status-item">
+                            <span><i class="fas fa-video"></i> 视频总数</span>
+                            <span class="status-value" id="totalMovies">{{ total_movies }}</span>
+                        </div>
+                        <div class="status-item">
+                            <span><i class="fas fa-tv"></i> 剧集数量</span>
+                            <span class="status-value" id="totalSeries">{{ total_series }}</span>
+                        </div>
+                        <div class="status-item">
+                            <span><i class="fas fa-plus"></i> 最近添加</span>
+                            <span class="status-value" id="recentAdded">0</span>
+                        </div>
+                        <div class="status-item">
+                            <span><i class="fas fa-clock"></i> 最后更新</span>
+                            <span class="status-value" id="lastUpdate">{{ now|date:"H:i" }}</span>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-outline-primary btn-sm w-100" id="refreshStats">
+                        <i class="fas fa-sync"></i> 刷新统计
+                    </button>
+                </div>
+            </div>
+            
+            <!-- 最近添加的视频 -->
+            <div class="card scan-card">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-history"></i> 最近添加
+                    </h5>
+                </div>
+                <div class="card-body p-0">
+                    <div class="recent-movies">
+                        {% for movie in recent_movies %}
+                        <div class="movie-item">
+                            <i class="fas fa-film text-muted"></i>
+                            <div class="movie-info">
+                                <div class="movie-title">{{ movie.title|truncatechars:30 }}</div>
+                                <div class="movie-meta">
+                                    {{ movie.created_at|date:"m-d H:i" }}
+                                    {% if movie.file_size_mb %}
+                                    • {{ movie.file_size_mb }}MB
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% empty %}
+                        <div class="text-center p-3 text-muted">
+                            <i class="fas fa-inbox"></i><br>
+                            暂无最近添加的视频
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 快速操作 -->
+            <div class="card scan-card">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0">
+                        <i class="fas fa-tools"></i> 快速操作
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-info btn-sm" onclick="window.open('/', '_blank')">
+                            <i class="fas fa-eye"></i> 查看影视库
+                        </button>
+                        <button class="btn btn-outline-secondary btn-sm" id="cleanupBtn">
+                            <i class="fas fa-trash"></i> 清理转码缓存
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="window.open('/admin/', '_blank')">
+                            <i class="fas fa-cog"></i> 管理后台
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const scanForm = document.getElementById('scanForm');
+    const scanBtn = document.getElementById('scanBtn');
+    const scanAlert = document.getElementById('scanAlert');
+    const scanProgress = document.getElementById('scanProgress');
+    const refreshBtn = document.getElementById('refreshStats');
+    const cleanupBtn = document.getElementById('cleanupBtn');
+    
+    let scanInterval;
+    
+    // 获取CSRF token
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    
+    // 显示提示信息
+    function showAlert(message, type = 'info') {
+        scanAlert.innerHTML = `
+            <div class="alert alert-${type} alert-scan">
+                <i class="fas fa-${type === 'success' ? 'check' : type === 'danger' ? 'times' : 'info'}-circle"></i>
+                ${message}
+            </div>
+        `;
+        scanAlert.style.display = 'block';
+    }
+    
+    // 隐藏提示信息
+    function hideAlert() {
+        scanAlert.style.display = 'none';
+    }
+    
+    // 更新统计信息
+    function updateStats() {
+        fetch('/management/scan-videos/status/')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('totalMovies').textContent = data.total_movies;
+                    document.getElementById('totalSeries').textContent = data.total_series;
+                    document.getElementById('recentAdded').textContent = data.recent_added;
+                    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                }
+            })
+            .catch(error => {
+                console.error('获取统计信息失败:', error);
+            });
+    }
+    
+    // 扫描表单提交
+    scanForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const formData = {
+            directory: document.getElementById('directory').value.trim(),
+            enable_scraping: document.getElementById('enableScraping').checked,
+            generate_thumbnails: document.getElementById('generateThumbnails').checked,
+            overwrite: document.getElementById('overwrite').checked
+        };
+        
+        if (!formData.directory) {
+            showAlert('请输入扫描目录路径', 'danger');
+            return;
+        }
+        
+        // 禁用按钮，显示进度
+        scanBtn.disabled = true;
+        scanBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 扫描中...';
+        scanProgress.style.display = 'block';
+        hideAlert();
+        
+        // 发送扫描请求
+        fetch('/management/scan-videos/start/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify(formData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showAlert(data.message, 'success');
+                
+                // 开始轮询状态
+                scanInterval = setInterval(updateStats, 3000);
+                
+                // 30秒后停止轮询并恢复按钮
+                setTimeout(() => {
+                    clearInterval(scanInterval);
+                    scanBtn.disabled = false;
+                    scanBtn.innerHTML = '<i class="fas fa-play"></i> 开始扫描';
+                    scanProgress.style.display = 'none';
+                    showAlert('扫描已完成，请查看统计信息', 'info');
+                    updateStats();
+                }, 30000);
+                
+            } else {
+                showAlert(data.error, 'danger');
+                scanBtn.disabled = false;
+                scanBtn.innerHTML = '<i class="fas fa-play"></i> 开始扫描';
+                scanProgress.style.display = 'none';
+            }
+        })
+        .catch(error => {
+            console.error('扫描请求失败:', error);
+            showAlert('扫描请求失败，请重试', 'danger');
+            scanBtn.disabled = false;
+            scanBtn.innerHTML = '<i class="fas fa-play"></i> 开始扫描';
+            scanProgress.style.display = 'none';
+        });
+    });
+    
+    // 刷新统计按钮
+    refreshBtn.addEventListener('click', function() {
+        this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 刷新中...';
+        this.disabled = true;
+        
+        updateStats();
+        
+        setTimeout(() => {
+            this.innerHTML = '<i class="fas fa-sync"></i> 刷新统计';
+            this.disabled = false;
+        }, 1000);
+    });
+    
+    // 清理转码缓存按钮
+    cleanupBtn.addEventListener('click', function() {
+        if (!confirm('确定要清理所有转码缓存文件吗？')) {
+            return;
+        }
+        
+        this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 清理中...';
+        this.disabled = true;
+        
+        fetch('/management/cleanup-transcodes/', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCookie('csrftoken'),
+            }
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                } else {
+                    showAlert(data.error, 'danger');
+                }
+            })
+            .catch(error => {
+                console.error('清理失败:', error);
+                showAlert('清理请求失败', 'danger');
+            })
+            .finally(() => {
+                this.innerHTML = '<i class="fas fa-trash"></i> 清理转码缓存';
+                this.disabled = false;
+            });
+    });
+    
+    // 初始化时更新一次统计
+    updateStats();
+});
+</script>
+{% endblock %} 

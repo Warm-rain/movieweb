@@ -71,6 +71,13 @@
                             <i class="bi bi-clock-history"></i> 观看历史
                         </a>
                     </li>
+                    {% if user.is_superuser %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'scan_videos_page' %}">
+                            <i class="bi bi-search"></i> 视频扫描
+                        </a>
+                    </li>
+                    {% endif %}
                     {% endif %}
                 </ul>
                 

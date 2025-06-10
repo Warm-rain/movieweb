@@ -26,11 +26,17 @@ class Command(BaseCommand):
             action='store_true',
             help='覆盖已存在的电影记录',
         )
+        parser.add_argument(
+            '--generate-thumbnails',
+            action='store_true',
+            help='生成视频缩略图',
+        )
 
     def handle(self, *args, **options):
         directory = options['directory']
         enable_scraping = options['scrape']
         overwrite = options['overwrite']
+        generate_thumbnails = options['generate_thumbnails']
         
         if not os.path.exists(directory):
             self.stdout.write(self.style.ERROR(f'目录不存在: {directory}'))
@@ -39,6 +45,8 @@ class Command(BaseCommand):
         self.stdout.write(f'开始扫描目录: {directory}')
         if enable_scraping:
             self.stdout.write('已启用刮削功能')
+        if generate_thumbnails:
+            self.stdout.write('已启用缩略图生成')
         
         # 初始化刮削器
         scraper = VideoScraper() if enable_scraping else None
@@ -58,7 +66,7 @@ class Command(BaseCommand):
                 if file_ext in video_extensions:
                     try:
                         result = self.process_video_file(
-                            file_path, scraper, overwrite, enable_scraping
+                            file_path, scraper, overwrite, enable_scraping, generate_thumbnails
                         )
                         if result == 'added':
                             added_count += 1
@@ -76,7 +84,7 @@ class Command(BaseCommand):
             )
         )
 
-    def process_video_file(self, file_path, scraper, overwrite, enable_scraping):
+    def process_video_file(self, file_path, scraper, overwrite, enable_scraping, generate_thumbnails):
         """处理单个视频文件"""
         file_size = os.path.getsize(file_path)
         filename = os.path.basename(file_path)
@@ -167,7 +175,8 @@ class Command(BaseCommand):
             action = 'added'
         
         # 生成缩略图
-        self.generate_thumbnail(movie, scrape_result)
+        if generate_thumbnails:
+            self.generate_thumbnail(movie, scrape_result)
         
         self.stdout.write(f'{"更新" if action == "updated" else "添加"}: {movie.title}')
         return action

@@ -4,7 +4,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db.models import Q, Count, Avg
-from django.http import JsonResponse, FileResponse, Http404
+from django.http import JsonResponse, FileResponse, Http404, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.utils import timezone
@@ -12,7 +12,10 @@ from django.db import transaction
 from django.views.generic import ListView
 from .models import Movie, WatchHistory, MovieRating, Series
 from .forms import MovieRatingForm
+from .transcoding import transcoding_service
 import json
+import mimetypes
+from pathlib import Path
 
 
 class MovieListView(ListView):
@@ -418,12 +421,23 @@ def rate_movie(request, pk):
     movie = get_object_or_404(Movie, pk=pk)
     
     try:
-        data = json.loads(request.body)
-        rating_value = int(data.get('rating', 0))
-        comment = data.get('comment', '').strip()
+        # 支持两种请求格式：JSON 和 传统表单
+        if request.content_type == 'application/json':
+            # AJAX JSON 请求
+            data = json.loads(request.body)
+            rating_value = int(data.get('rating', 0))
+            comment = data.get('comment', '').strip()
+        else:
+            # 传统表单 POST 请求
+            rating_value = int(request.POST.get('rating', 0))
+            comment = request.POST.get('comment', '').strip()
         
         if not (1 <= rating_value <= 5):
-            return JsonResponse({'success': False, 'error': '评分必须在1-5之间'})
+            if request.content_type == 'application/json':
+                return JsonResponse({'success': False, 'error': '评分必须在1-5之间'})
+            else:
+                messages.error(request, '评分必须在1-5之间')
+                return redirect('movie_detail', pk=pk)
         
         with transaction.atomic():
             rating, created = MovieRating.objects.update_or_create(
@@ -440,17 +454,33 @@ def rate_movie(request, pk):
             Avg('rating')
         )['rating__avg']
         
-        return JsonResponse({
-            'success': True,
-            'message': '评分已更新' if not created else '评分已添加',
-            'avg_rating': round(avg_rating, 1) if avg_rating else 0,
-            'user_rating': rating_value
-        })
+        if request.content_type == 'application/json':
+            # AJAX 响应
+            return JsonResponse({
+                'success': True,
+                'message': '评分已更新' if not created else '评分已添加',
+                'avg_rating': round(avg_rating, 1) if avg_rating else 0,
+                'user_rating': rating_value
+            })
+        else:
+            # 传统表单响应
+            messages.success(request, '评分已更新' if not created else '评分已添加')
+            return redirect('movie_detail', pk=pk)
         
-    except (ValueError, json.JSONDecodeError):
-        return JsonResponse({'success': False, 'error': '无效的请求数据'})
+    except (ValueError, TypeError):
+        if request.content_type == 'application/json':
+            return JsonResponse({'success': False, 'error': '无效的评分数据'})
+        else:
+            messages.error(request, '无效的评分数据')
+            return redirect('movie_detail', pk=pk)
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': '无效的JSON数据'})
     except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)})
+        if request.content_type == 'application/json':
+            return JsonResponse({'success': False, 'error': str(e)})
+        else:
+            messages.error(request, f'评分失败: {str(e)}')
+            return redirect('movie_detail', pk=pk)
 
 
 @login_required
@@ -546,4 +576,314 @@ def watch_history_view(request):
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
     
-    return render(request, 'movies/watch_history.html', {'page_obj': page_obj}) 
+    return render(request, 'movies/watch_history.html', {'page_obj': page_obj})
+
+
+# ==================== GPU硬解转码相关视图 ====================
+
+def get_video_resolutions(request, pk):
+    """获取视频可用分辨率"""
+    movie = get_object_or_404(Movie, pk=pk)
+    
+    try:
+        available_resolutions = transcoding_service.get_available_resolutions(movie)
+        
+        return JsonResponse({
+            'success': True,
+            'resolutions': available_resolutions,
+            'original_info': transcoding_service.get_video_info(movie.file_path)
+        })
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        })
+
+
+@require_POST
+def start_transcoding(request, pk):
+    """开始转码"""
+    movie = get_object_or_404(Movie, pk=pk)
+    
+    try:
+        data = json.loads(request.body)
+        resolution = data.get('resolution')
+        
+        if not resolution:
+            return JsonResponse({'success': False, 'error': '请指定分辨率'})
+        
+        if resolution == '原画':
+            return JsonResponse({
+                'success': True,
+                'message': '原画无需转码',
+                'status': 'completed',
+                'url': f'/movies/{pk}/video/'
+            })
+        
+        # 开始转码
+        transcode_id, status = transcoding_service.start_transcoding(movie, resolution)
+        
+        if not transcode_id:
+            return JsonResponse({
+                'success': False,
+                'error': '转码启动失败',
+                'status': status
+            })
+        
+        return JsonResponse({
+            'success': True,
+            'transcode_id': transcode_id,
+            'status': status,
+            'message': '转码已开始' if status == 'started' else '转码已完成'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': '无效的JSON数据'})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)})
+
+
+def get_transcode_status(request, transcode_id):
+    """获取转码状态"""
+    try:
+        status = transcoding_service.get_transcode_status(transcode_id)
+        
+        if not status:
+            return JsonResponse({
+                'success': False,
+                'error': '转码任务不存在'
+            })
+        
+        return JsonResponse({
+            'success': True,
+            'status': status['status'],
+            'elapsed': status['elapsed'],
+            'movie': status['movie'],
+            'resolution': status['resolution']
+        })
+        
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)})
+
+
+def serve_hls_video(request, pk, resolution):
+    """提供HLS视频流"""
+    movie = get_object_or_404(Movie, pk=pk)
+    
+    try:
+        # 获取HLS文件路径
+        hls_path = transcoding_service.get_hls_path(movie.id, resolution)
+        
+        if not hls_path.exists():
+            return JsonResponse({
+                'success': False,
+                'error': f'转码文件不存在: {resolution}',
+                'need_transcode': True
+            })
+        
+        # 读取并返回m3u8文件
+        with open(hls_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 修改相对路径为绝对URL
+        lines = content.split('\n')
+        modified_lines = []
+        
+        for line in lines:
+            if line.endswith('.ts'):
+                # 将.ts文件路径转换为URL
+                ts_filename = line
+                ts_url = f'/movies/{pk}/hls/{resolution}/{ts_filename}'
+                modified_lines.append(ts_url)
+            else:
+                modified_lines.append(line)
+        
+        modified_content = '\n'.join(modified_lines)
+        
+        response = JsonResponse({
+            'success': True,
+            'content': modified_content,
+            'content_type': 'application/vnd.apple.mpegurl'
+        })
+        
+        return response
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        })
+
+
+def serve_hls_segment(request, pk, resolution, filename):
+    """提供HLS视频片段"""
+    movie = get_object_or_404(Movie, pk=pk)
+    
+    try:
+        # 构建文件路径
+        transcode_id = transcoding_service.generate_transcode_id(movie.id, resolution)
+        segment_path = transcoding_service.transcode_dir / transcode_id / filename
+        
+        if not segment_path.exists():
+            raise Http404(f"视频片段不存在: {filename}")
+        
+        # 流式返回视频片段
+        def file_iterator(file_path, chunk_size=8192):
+            with open(file_path, 'rb') as f:
+                while True:
+                    data = f.read(chunk_size)
+                    if not data:
+                        break
+                    yield data
+        
+        response = StreamingHttpResponse(
+            file_iterator(segment_path),
+            content_type='video/mp2t'
+        )
+        response['Content-Length'] = str(segment_path.stat().st_size)
+        response['Accept-Ranges'] = 'bytes'
+        response['Cache-Control'] = 'public, max-age=3600'  # 缓存1小时
+        
+        return response
+        
+    except Exception as e:
+        raise Http404(f"无法提供视频片段: {str(e)}")
+
+
+def cleanup_transcodes(request):
+    """清理旧的转码文件（管理员功能）"""
+    if not request.user.is_superuser:
+        return JsonResponse({'success': False, 'error': '权限不足'})
+    
+    try:
+        transcoding_service.cleanup_old_transcodes()
+        return JsonResponse({
+            'success': True,
+            'message': '转码文件清理完成'
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)})
+
+
+# ==================== 视频扫描管理 ====================
+
+@login_required
+def scan_videos_page(request):
+    """视频扫描管理页面"""
+    if not request.user.is_superuser:
+        messages.error(request, '只有管理员可以访问此页面')
+        return redirect('index')
+    
+    context = {
+        'total_movies': Movie.objects.count(),
+        'total_series': Series.objects.count(),
+        'recent_movies': Movie.objects.order_by('-created_at')[:5],
+    }
+    return render(request, 'movies/scan_videos.html', context)
+
+
+@require_POST
+@login_required
+def start_scan_videos(request):
+    """开始扫描视频"""
+    if not request.user.is_superuser:
+        return JsonResponse({'success': False, 'error': '权限不足'})
+    
+    try:
+        data = json.loads(request.body)
+        directory = data.get('directory', '').strip()
+        enable_scraping = data.get('enable_scraping', False)
+        generate_thumbnails = data.get('generate_thumbnails', False)
+        overwrite = data.get('overwrite', False)
+        
+        if not directory:
+            return JsonResponse({'success': False, 'error': '请指定扫描目录'})
+        
+        if not os.path.exists(directory):
+            return JsonResponse({'success': False, 'error': '目录不存在'})
+        
+        # 在后台启动扫描任务
+        import threading
+        from django.core.management import call_command
+        from io import StringIO
+        
+        def run_scan():
+            """后台运行扫描"""
+            try:
+                # 构建命令参数
+                args = [directory]
+                kwargs = {}
+                
+                if enable_scraping:
+                    kwargs['scrape'] = True
+                if generate_thumbnails:
+                    kwargs['generate_thumbnails'] = True
+                if overwrite:
+                    kwargs['overwrite'] = True
+                
+                # 捕获输出
+                out = StringIO()
+                call_command('scan_videos', *args, stdout=out, **kwargs)
+                
+                # 这里可以存储扫描结果到缓存或数据库
+                print(f"✅ 扫描完成: {directory}")
+                print(out.getvalue())
+                
+            except Exception as e:
+                print(f"❌ 扫描失败: {e}")
+        
+        # 启动后台线程
+        thread = threading.Thread(target=run_scan)
+        thread.daemon = True
+        thread.start()
+        
+        return JsonResponse({
+            'success': True,
+            'message': '视频扫描已开始，请稍等...'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': '无效的JSON数据'})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)})
+
+
+@login_required  
+def get_scan_status(request):
+    """获取扫描状态"""
+    if not request.user.is_superuser:
+        return JsonResponse({'success': False, 'error': '权限不足'})
+    
+    try:
+        # 获取最新的电影统计
+        total_movies = Movie.objects.count()
+        total_series = Series.objects.count()
+        recent_count = Movie.objects.filter(
+            created_at__gte=timezone.now() - timezone.timedelta(minutes=10)
+        ).count()
+        
+        return JsonResponse({
+            'success': True,
+            'total_movies': total_movies,
+            'total_series': total_series,
+            'recent_added': recent_count,
+            'last_update': timezone.now().isoformat()
+        })
+        
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)})
+
+
+def cleanup_transcodes(request):
+    """清理旧的转码文件（管理员功能）"""
+    if not request.user.is_superuser:
+        return JsonResponse({'success': False, 'error': '权限不足'})
+    
+    try:
+        transcoding_service.cleanup_old_transcodes()
+        return JsonResponse({
+            'success': True,
+            'message': '转码文件清理完成'
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}) 
