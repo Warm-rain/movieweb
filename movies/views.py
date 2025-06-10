@@ -4,18 +4,25 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db.models import Q, Count, Avg
-from django.http import JsonResponse, FileResponse, Http404, StreamingHttpResponse
+from django.http import JsonResponse, FileResponse, Http404, StreamingHttpResponse, HttpResponseNotFound, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_GET
 from django.utils import timezone
 from django.db import transaction
 from django.views.generic import ListView
 from .models import Movie, WatchHistory, MovieRating, Series
 from .forms import MovieRatingForm
-from .transcoding import transcoding_service
+from .transcoding import TranscodingService
 import json
 import mimetypes
 from pathlib import Path
+import os
+import re
+import time
+import logging
+from datetime import timedelta
+
+logger = logging.getLogger(__name__)
 
 
 class MovieListView(ListView):
@@ -886,4 +893,287 @@ def cleanup_transcodes(request):
             'message': '转码文件清理完成'
         })
     except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}) 
+        return JsonResponse({'success': False, 'error': str(e)})
+
+
+# ==================== 实时转码相关视图 ====================
+
+def test_api(request):
+    """测试API是否可访问"""
+    print("🔍 [DEBUG] 测试API被调用")
+    return JsonResponse({'success': True, 'message': 'API可以正常访问'})
+
+@login_required
+@require_GET
+def get_available_resolutions(request, pk):
+    """获取视频可用的分辨率选项"""
+    print(f"🔍 [DEBUG] 获取分辨率API调用 - Movie ID: {pk}")
+    
+    movie = get_object_or_404(Movie, pk=pk)
+    print(f"📺 [DEBUG] 视频文件: {movie.title}")
+    print(f"📁 [DEBUG] 文件路径: {movie.file_path}")
+    
+    if not movie.file_path or not os.path.exists(movie.file_path):
+        print(f"❌ [DEBUG] 视频文件不存在: {movie.file_path}")
+        return JsonResponse({'success': False, 'error': '视频文件不存在'})
+    
+    print(f"✅ [DEBUG] 开始获取可用分辨率...")
+    available_resolutions = TranscodingService.get_available_resolutions(movie.file_path)
+    print(f"📊 [DEBUG] 可用分辨率: {available_resolutions}")
+    
+    # 添加原画质量选项
+    available_resolutions.insert(0, '原画')
+    
+    # 获取视频原始信息
+    video_info = TranscodingService.get_video_info(movie.file_path)
+    print(f"📺 [DEBUG] 视频信息: {video_info}")
+    
+    result = {
+        'success': True, 
+        'resolutions': available_resolutions,
+        'original_info': video_info
+    }
+    print(f"✅ [DEBUG] API响应: {result}")
+    
+    return JsonResponse(result)
+
+@login_required
+@require_GET
+def realtime_transcode_request(request, pk, resolution):
+    """请求实时转码"""
+    print(f"🚀 [DEBUG] 实时转码请求 - Movie ID: {pk}, 分辨率: {resolution}")
+    
+    movie = get_object_or_404(Movie, pk=pk)
+    print(f"📺 [DEBUG] 视频文件: {movie.title}")
+    print(f"📁 [DEBUG] 文件路径: {movie.file_path}")
+    
+    if not movie.file_path or not os.path.exists(movie.file_path):
+        print(f"❌ [DEBUG] 视频文件不存在: {movie.file_path}")
+        return JsonResponse({'success': False, 'error': '视频文件不存在'})
+    
+    # 获取可用分辨率
+    print(f"🔍 [DEBUG] 检查可用分辨率...")
+    available_resolutions = TranscodingService.get_available_resolutions(movie.file_path)
+    print(f"📊 [DEBUG] 可用分辨率: {available_resolutions}")
+    
+    # 检查请求的分辨率是否有效
+    if resolution != '原画' and resolution not in available_resolutions:
+        print(f"❌ [DEBUG] 不支持的分辨率: {resolution}")
+        return JsonResponse({'success': False, 'error': f'不支持的分辨率: {resolution}'})
+    
+    # 如果是原画质量，直接返回成功
+    if resolution == '原画':
+        print(f"📺 [DEBUG] 使用原画质量，无需转码")
+        return JsonResponse({
+            'success': True,
+            'status': 'ready',
+            'realtime': False,
+            'message': '使用原始视频质量'
+        })
+    
+    # 开始实时转码
+    print(f"🔥 [DEBUG] 开始实时转码: {resolution}")
+    result = TranscodingService.start_realtime_transcoding(movie.file_path, resolution)
+    print(f"🔥 [DEBUG] 转码结果: {result}")
+    
+    if result['success']:
+        # 记录会话ID到用户会话
+        if 'realtime_sessions' not in request.session:
+            request.session['realtime_sessions'] = []
+        
+        # 添加新会话并确保不重复
+        if result['session_id'] not in request.session['realtime_sessions']:
+            request.session['realtime_sessions'].append(result['session_id'])
+            request.session.modified = True
+        
+        return JsonResponse({
+            'success': True,
+            'status': 'active',
+            'realtime': True,
+            'session_id': result['session_id'],
+            'resolution': resolution,
+            'encoder': result.get('encoder', 'unknown'),
+            'rtx_optimized': result.get('rtx_optimized', False),
+            'message': f'实时转码已开始: {resolution}'
+        })
+    else:
+        return JsonResponse({
+            'success': False,
+            'error': result.get('error', '未知错误')
+        })
+
+@login_required
+@require_GET
+def realtime_hls_stream(request, pk, resolution, session_id):
+    """获取实时HLS流"""
+    movie = get_object_or_404(Movie, pk=pk)
+    
+    if not movie.file_path or not os.path.exists(movie.file_path):
+        return JsonResponse({'success': False, 'error': '视频文件不存在'})
+    
+    # 验证会话是否属于当前用户
+    if 'realtime_sessions' not in request.session or session_id not in request.session['realtime_sessions']:
+        return JsonResponse({'success': False, 'error': '无效的转码会话'})
+    
+    # 获取HLS内容
+    result = TranscodingService.get_realtime_hls_content(session_id, resolution)
+    
+    if result['success']:
+        # 返回HLS文件的URL而不是内容
+        hls_url = f'/api/realtime/{session_id}/hls/{resolution}.m3u8'
+        return JsonResponse({
+            'success': True,
+            'hls_url': hls_url,
+            'realtime': True
+        })
+    else:
+        return JsonResponse({
+            'success': False,
+            'error': result.get('error', '未知错误'),
+            'need_transcode': True  # 提示前端可能需要重新请求转码
+        })
+
+@login_required
+@require_GET
+def realtime_segment(request, session_id, segment_name):
+    """获取实时HLS视频片段"""
+    # 验证会话是否属于当前用户
+    if 'realtime_sessions' not in request.session or session_id not in request.session['realtime_sessions']:
+        return HttpResponseNotFound('无效的转码会话')
+    
+    # 检查会话是否存在
+    session_info = TranscodingService.get_realtime_session(session_id)
+    if not session_info['success']:
+        return HttpResponseNotFound('转码会话不存在')
+    
+    # 组装片段文件路径
+    from django.conf import settings
+    TRANSCODED_DIR = os.path.join(settings.MEDIA_ROOT, 'transcoded')
+    segment_path = os.path.join(TRANSCODED_DIR, f"realtime_{session_id}", segment_name)
+    
+    if not os.path.exists(segment_path):
+        return HttpResponseNotFound('视频片段不存在')
+    
+    # 使用StreamingHttpResponse减少内存占用
+    def file_iterator(file_path, chunk_size=8192):
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    
+    response = StreamingHttpResponse(file_iterator(segment_path), content_type='video/MP2T')
+    response['Cache-Control'] = 'max-age=300'  # 缓存5分钟
+    
+    return response
+
+@require_GET  
+def serve_realtime_hls(request, session_id, filename):
+    """直接提供实时HLS文件"""
+    # 简化版本：直接尝试访问文件，不检查会话（适用于重启后的情况）
+    
+    # 组装HLS文件路径
+    from django.conf import settings
+    TRANSCODED_DIR = os.path.join(settings.MEDIA_ROOT, 'transcoded')
+    hls_path = os.path.join(TRANSCODED_DIR, f"realtime_{session_id}", filename)
+    
+    if not os.path.exists(hls_path):
+        return HttpResponseNotFound('HLS文件不存在')
+    
+    try:
+        # 读取HLS文件内容
+        with open(hls_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 修改.ts文件路径为完整URL
+        lines = content.split('\n')
+        modified_lines = []
+        
+        for line in lines:
+            if line.endswith('.ts'):
+                # 将.ts文件路径转换为URL
+                ts_url = f'/api/realtime/{session_id}/ts/{line}'
+                modified_lines.append(ts_url)
+            else:
+                modified_lines.append(line)
+        
+        modified_content = '\n'.join(modified_lines)
+        
+        # 返回HLS播放列表
+        response = HttpResponse(modified_content, content_type='application/vnd.apple.mpegurl')
+        response['Cache-Control'] = 'no-cache'  # HLS文件不应缓存
+        response['Access-Control-Allow-Origin'] = '*'  # 允许跨域访问
+        
+        return response
+        
+    except Exception as e:
+        return HttpResponseNotFound(f'读取HLS文件失败: {str(e)}')
+
+@require_GET
+def serve_realtime_segment(request, session_id, filename):
+    """直接提供实时HLS片段文件"""  
+    # 简化版本：直接尝试访问文件，不检查会话（适用于重启后的情况）
+    
+    # 组装片段文件路径
+    from django.conf import settings
+    TRANSCODED_DIR = os.path.join(settings.MEDIA_ROOT, 'transcoded')
+    segment_path = os.path.join(TRANSCODED_DIR, f"realtime_{session_id}", filename)
+    
+    if not os.path.exists(segment_path):
+        return HttpResponseNotFound('视频片段不存在')
+    
+    # 使用StreamingHttpResponse减少内存占用
+    def file_iterator(file_path, chunk_size=8192):
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    
+    response = StreamingHttpResponse(file_iterator(segment_path), content_type='video/MP2T')
+    response['Content-Length'] = str(os.path.getsize(segment_path))
+    response['Cache-Control'] = 'max-age=300'  # 缓存5分钟
+    response['Access-Control-Allow-Origin'] = '*'  # 允许跨域访问
+    
+    return response
+
+@login_required
+@require_POST
+def stop_realtime_session(request):
+    """停止实时转码会话"""
+    try:
+        data = json.loads(request.body)
+        session_id = data.get('session_id')
+        
+        if not session_id:
+            return JsonResponse({'success': False, 'error': '缺少会话ID'})
+        
+        # 验证会话是否属于当前用户
+        if 'realtime_sessions' not in request.session or session_id not in request.session['realtime_sessions']:
+            return JsonResponse({'success': False, 'error': '无效的转码会话'})
+        
+        # 停止会话
+        result = TranscodingService.stop_realtime_session(session_id)
+        
+        if result['success']:
+            # 从用户会话中移除
+            request.session['realtime_sessions'].remove(session_id)
+            request.session.modified = True
+            
+            return JsonResponse({
+                'success': True,
+                'message': '实时转码会话已停止'
+            })
+        else:
+            return JsonResponse({
+                'success': False,
+                'error': result.get('error', '未知错误')
+            })
+    
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }) 

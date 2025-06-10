@@ -23,4 +23,16 @@ urlpatterns = [
     path('management/scan-videos/', views.scan_videos_page, name='scan_videos_page'),
     path('management/scan-videos/start/', views.start_scan_videos, name='start_scan_videos'),
     path('management/scan-videos/status/', views.get_scan_status, name='get_scan_status'),
+    
+    # 新增实时转码相关API
+    path('api/test/', views.test_api, name='test_api'),
+    path('api/<int:pk>/resolutions/', views.get_available_resolutions, name='get_available_resolutions'),
+    path('api/<int:pk>/realtime/<str:resolution>/', views.realtime_transcode_request, name='realtime_transcode_request'),
+    path('api/<int:pk>/realtime/<str:resolution>/<str:session_id>/', views.realtime_hls_stream, name='realtime_hls_stream'),
+    path('api/realtime/segment/<str:session_id>/<str:segment_name>', views.realtime_segment, name='realtime_segment'),
+    path('api/realtime/stop/', views.stop_realtime_session, name='stop_realtime_session'),
+    
+    # HLS文件直接访问
+    path('api/realtime/<str:session_id>/hls/<str:filename>', views.serve_realtime_hls, name='serve_realtime_hls'),
+    path('api/realtime/<str:session_id>/ts/<str:filename>', views.serve_realtime_segment, name='serve_realtime_segment'),
 ] 
