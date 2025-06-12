@@ -1,3 +1,4 @@
 .env
 media/transcoded/
 db.sqlite3
+media/thumbnails/

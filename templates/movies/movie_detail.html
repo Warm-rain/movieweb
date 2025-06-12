@@ -984,9 +984,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 状态变量
     let progressUpdateInterval;
+    let progressSaveInterval;
     let controlsTimeout;
     let isTogglingPlayPause = false;
     let isDragging = false;
+    let lastSavedTime = 0;
     let isFullscreen = false;
     let isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     let currentTranscodeId = null;
@@ -1151,6 +1153,43 @@ document.addEventListener('DOMContentLoaded', function() {
                 // 可以添加发送观看完成记录的逻辑
             }
         }
+    }
+
+    // 保存观看进度到服务器
+    function saveWatchProgress() {
+        // 只有登录用户才保存进度
+        {% if user.is_authenticated %}
+        if (player.currentTime && player.duration) {
+            // 避免过于频繁的保存，只有进度变化超过3秒才保存
+            if (Math.abs(player.currentTime - lastSavedTime) > 3) {
+                lastSavedTime = player.currentTime;
+                
+                console.log('💾 保存观看进度:', Math.floor(player.currentTime) + '秒');
+                
+                fetch(`/movie/{{ movie.pk }}/progress/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                    },
+                    body: JSON.stringify({
+                        currentTime: player.currentTime
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('✅ 观看进度保存成功:', data.progress_seconds + '秒');
+                    } else {
+                        console.error('❌ 观看进度保存失败:', data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('❌ 观看进度保存网络错误:', error);
+                });
+            }
+        }
+        {% endif %}
     }
 
     // 更新时间显示
@@ -1646,6 +1685,9 @@ document.addEventListener('DOMContentLoaded', function() {
         // 开始更新进度条
         progressUpdateInterval = setInterval(updateProgress, 100);
         
+        // 开始保存观看进度（每15秒保存一次）
+        progressSaveInterval = setInterval(saveWatchProgress, 15000);
+        
         // 移除暂停状态
         videoContainer.classList.remove('paused');
         
@@ -1662,6 +1704,12 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 停止更新进度条
         clearInterval(progressUpdateInterval);
+        
+        // 停止保存观看进度
+        clearInterval(progressSaveInterval);
+        
+        // 暂停时立即保存一次进度
+        saveWatchProgress();
         
         // 暂停时始终显示控制栏
         videoContainer.classList.add('paused');
@@ -1682,6 +1730,10 @@ document.addEventListener('DOMContentLoaded', function() {
         playPauseBtn.innerHTML = '<i class="fas fa-redo"></i>';
         playPauseBtn.title = '重新播放';
         clearInterval(progressUpdateInterval);
+        clearInterval(progressSaveInterval);
+        
+        // 播放结束时保存完整进度
+        saveWatchProgress();
         
         // 播放结束时显示控制栏
         videoContainer.classList.add('paused');
@@ -2036,6 +2088,48 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 尝试加载可用分辨率
     loadAvailableResolutions();
+    
+    // 检查是否有观看进度，询问用户是否继续观看
+    {% if watch_history and watch_history.progress %}
+    setTimeout(() => {
+        const progressSeconds = {{ watch_history.progress.total_seconds }};
+        const minutes = Math.floor(progressSeconds / 60);
+        const seconds = Math.floor(progressSeconds % 60);
+        const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        
+        if (progressSeconds > 30) { // 只有观看超过30秒才询问
+            const shouldContinue = confirm(`检测到上次观看进度：${timeStr}\n是否继续观看？`);
+            if (shouldContinue) {
+                resumeFromProgress();
+            }
+        }
+    }, 1000);
+    {% endif %}
+    
+    // 页面离开时保存进度
+    window.addEventListener('beforeunload', function() {
+        saveWatchProgress();
+    });
 });
+
+// 继续观看功能
+function resumeFromProgress() {
+    {% if watch_history and watch_history.progress %}
+    const progressSeconds = {{ watch_history.progress.total_seconds }};
+    const player = document.getElementById('moviePlayer');
+    
+    if (player && progressSeconds > 0) {
+        console.log('▶️ 继续观看，跳转到:', progressSeconds + '秒');
+        player.currentTime = progressSeconds;
+        player.play();
+        
+        // 滚动到播放器位置
+        player.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'center' 
+        });
+    }
+    {% endif %}
+}
 </script>
 {% endblock %} 
